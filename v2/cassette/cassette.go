@@ -25,6 +25,7 @@
 package cassette
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/ioutil"
@@ -119,6 +120,9 @@ type Cassette struct {
 	// Name of the cassette
 	Name string `yaml:"-"`
 
+	// Format of the cassette
+	Format string `yaml:"-"`
+
 	// File name of the cassette as written on disk
 	File string `yaml:"-"`
 
@@ -143,11 +147,33 @@ type Cassette struct {
 	SaveFilters []Filter `yaml:"-"`
 }
 
+const (
+	FormatJSON = `json`
+	FormatYAML = `yaml`
+)
+
 // New creates a new empty cassette
 func New(name string) *Cassette {
+	return NewWithFormat(name, FormatYAML)
+}
+
+// NewWithFormat creates a new empty cassette of a particular format
+func NewWithFormat(name string, format string) *Cassette {
+	var file string
+
+	switch format {
+	case FormatYAML:
+		file = fmt.Sprintf("%s.yaml", name)
+	case FormatJSON:
+		file = fmt.Sprintf("%s.json", name)
+	default:
+		panic("unsupported format " + format)
+	}
+
 	c := &Cassette{
 		Name:         name,
-		File:         fmt.Sprintf("%s.yaml", name),
+		File:         file,
+		Format:       format,
 		Version:      cassetteFormatV1,
 		Interactions: make([]*Interaction, 0),
 		Matcher:      DefaultMatcher,
@@ -166,8 +192,18 @@ func Load(name string) (*Cassette, error) {
 		return nil, err
 	}
 
-	err = yaml.Unmarshal(data, &c)
+	err = yaml.Unmarshal(data, c)
+	return c, err
+}
 
+func LoadJSON(name string) (*Cassette, error) {
+	c := NewWithFormat(name, FormatJSON)
+	data, err := ioutil.ReadFile(c.File)
+	if err != nil {
+		return nil, err
+	}
+
+	err = json.Unmarshal(data, &c)
 	return c, err
 }
 
@@ -217,29 +253,35 @@ func (c *Cassette) Save() error {
 		}
 	}
 
-	// Marshal to YAML and save interactions
-	data, err := yaml.Marshal(c)
-	if err != nil {
-		return err
-	}
-
+	// Marshal to save interactions
 	f, err := os.Create(c.File)
 	if err != nil {
 		return err
 	}
-
 	defer f.Close()
 
-	// Honor the YAML structure specification
-	// http://www.yaml.org/spec/1.2/spec.html#id2760395
-	_, err = f.Write([]byte("---\n"))
-	if err != nil {
-		return err
-	}
+	if c.Format == FormatYAML {
+		// Honor the YAML structure specification
+		// http://www.yaml.org/spec/1.2/spec.html#id2760395
+		_, err = f.Write([]byte("---\n"))
+		if err != nil {
+			return err
+		}
 
-	_, err = f.Write(data)
-	if err != nil {
-		return err
+		enc := yaml.NewEncoder(f)
+		if err := enc.Encode(c); err != nil {
+			return err
+		}
+
+		if err := enc.Close(); err != nil {
+			return err
+		}
+	} else if c.Format == FormatJSON {
+		if err := json.NewEncoder(f).Encode(c); err != nil {
+			return err
+		}
+	} else {
+		panic("unsupported format " + c.Format)
 	}
 
 	return nil
